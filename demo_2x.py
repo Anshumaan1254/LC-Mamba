@@ -55,10 +55,12 @@ if MODEL_CONFIG is None:
 # Initialize model
 model = Model(-1, MODEL_CONFIG)
 
-# ── 3. ROBUST CUSTOM WEIGHT LOADER ────────────────────────────────
+# ── 3. ROBUST CUSTOM WEIGHT LOADER (WITH FIX FOR TYPO) ────────────
 checkpoint = torch.load(ckpt_path, map_location='cpu')
 
-if isinstance(checkpoint, dict) and 'model' in checkpoint:
+if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+    state_dict = checkpoint['model_state_dict']
+elif isinstance(checkpoint, dict) and 'model' in checkpoint:
     state_dict = checkpoint['model']
 elif isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
     state_dict = checkpoint['state_dict']
@@ -67,7 +69,13 @@ else:
 
 clean_state_dict = {}
 for k, v in state_dict.items():
+    # 1. Strip multi-GPU prefixes
     clean_key = k.replace('module.', '').replace('net.', '')
+    
+    # 2. Fix the authors' typo: map "uup" to "unet.up"
+    if clean_key.startswith('uup'):
+        clean_key = clean_key.replace('uup', 'unet.up', 1)
+        
     clean_state_dict[clean_key] = v
 
 if hasattr(model, 'net'):
@@ -75,7 +83,7 @@ if hasattr(model, 'net'):
 else:
     missing, unexpected = model.load_state_dict(clean_state_dict, strict=False)
 
-print(f"✅ Weights forcefully loaded. (Missing keys: {len(missing)} | Unexpected keys: {len(unexpected)})")
+print(f"✅ Weights loaded successfully! (Missing: {len(missing)} | Unexpected: {len(unexpected)})")
 
 model.eval()
 model.device()
@@ -98,13 +106,12 @@ padding = (0, pw - w, 0, ph - h)
 img0 = F.pad(img0, padding)
 img1 = F.pad(img1, padding)
 
-# ── 5. Run Inference with Tensor Timestep Fix ─────────────────────
+# ── 5. Run Inference ──────────────────────────────────────────────
 print("Interpolating...")
 timestep_tensor = torch.tensor([0.5], dtype=torch.float32, device=device)
 
 with torch.no_grad():
     if hasattr(model, 'inference'):
-        # Pass the tensor explicitly to avoid the float attribute error
         mid = model.inference(img0, img1, TTA=args.TTA, fast_TTA=args.TTA, timestep=timestep_tensor)
     else:
         mid = model.update(img0, img1, timestep=timestep_tensor)
